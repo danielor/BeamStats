@@ -14,46 +14,57 @@ import org.apache.beam.sdk.transforms.Combine;
 import org.apache.beam.sdk.transforms.Combine.AccumulatingCombineFn.Accumulator;
 
 /**
- * {@code PTransform}s for computing variance of elements in a {@code PCollection} or
- * the variance of a value by key in a {@code
+ * {@code PTransform}s for computing moments of elements in a {@code PCollection} or
+ * the central moment of a value by key in a {@code KV}
  */
-public class Variance {
+public class Moment {
 
   private static final double EPSILON = 1e-7; // For floating point comparisons;
 
-  private Variance() {}
+  private Moment() {}
+  
+  /**
+   * An enum that encapsulates the different moments
+   */
+  public enum MomentType {
+    MEAN,
+    VARIANCE
+  };
 
   /**
    * Returns a {@code PTransform} that takes an input {@code PCollection<N>} and returns a
    * {@code PCollection<Double>} whose content is the variance of the input.
    *
+   * @param type The moment type (mean, variance, skew, etc.)
    * @param <N> the type of {@code Number}
    * @return
    */
-  public static <N extends Number> Combine.Globally<N, Double> globally() {
-    return Combine.globally(Variance.of());
+  public static <N extends Number> Combine.Globally<N, Double> globally(MomentType type) {
+    return Combine.globally(Moment.of(type));
   }
 
   /**
    * Returns a {@code PTransform} that takes an input {@code PCollection<KV<K,N>>} and returns
    * a {@code PCollection<KV<K, Double>>} that computes the variance for each key K.
    *
+   * @param type The moment type (mean, variance, skew, etc.)
    * @param <K> The type of keys
    * @param <N> The type of {@code Number}s
    * @return
    */
-  public static <K, N extends Number> Combine.PerKey<K, N, Double> perKey() {
-    return Combine.perKey(Variance.of());
+  public static <K, N extends Number> Combine.PerKey<K, N, Double> perKey(MomentType type) {
+    return Combine.perKey(Moment.of(type));
   }
 
   /**
    * Creates a {@code Combine.CombineFn} that computes the variance of a {@code PCollection}
    *
+   * @param type The moment type (mean, variance, skew, etc.)
    * @param <N> the type of {@code Number}
    * @return
    */
-  public static <N extends Number> Combine.AccumulatingCombineFn<N, VarianceAccumulator<N>, Double> of() {
-    return new VarianceFunction<>();
+  public static <N extends Number> Combine.AccumulatingCombineFn<N, MomentAccumulator<N>, Double> of(MomentType type) {
+    return new VarianceFunction<>(type);
   }
 
   /**
@@ -61,19 +72,25 @@ public class Variance {
    * @param <N>
    */
   private static class VarianceFunction<N extends Number>
-    extends Combine.AccumulatingCombineFn<N, VarianceAccumulator<N>, Double> {
+    extends Combine.AccumulatingCombineFn<N, MomentAccumulator<N>, Double> {
 
+    MomentType type;
+    
+    public VarianceFunction(MomentType t) {
+      type = t;
+    }
+    
     @Override
-    public VarianceAccumulator<N> createAccumulator() {
-      return new VarianceAccumulator<>();
+    public MomentAccumulator<N> createAccumulator() {
+      return new MomentAccumulator<>(type);
     }
 
     @Override
-    public Coder<VarianceAccumulator<N>> getAccumulatorCoder(
+    public Coder<MomentAccumulator<N>> getAccumulatorCoder(
       CoderRegistry registry,
       Coder<N> inputCoder
     ) {
-      return new VarianceCoder<>();
+      return new MomentCoder<>();
     }
   }
 
@@ -81,18 +98,23 @@ public class Variance {
    * An accumulator class that calculates the variance E[X^2] - (E[X])^2
    * @param <N> Number
    */
-  static class VarianceAccumulator<N extends Number>
-    implements Accumulator<N, VarianceAccumulator<N>, Double> {
+  static class MomentAccumulator<N extends Number>
+    implements Accumulator<N, MomentAccumulator<N>, Double> {
 
     long count = 0;
     double sum = 0.0;
     double sumsq = 0.0;
+    MomentType type = MomentType.MEAN;
 
-    public VarianceAccumulator() {
+    public MomentAccumulator() {
       this(0, 0.0, 0.0);
     }
+    
+    public MomentAccumulator(MomentType t) {
+      this.type = t;
+    }
 
-    public VarianceAccumulator(long count, double sum, double sumsq) {
+    public MomentAccumulator(long count, double sum, double sumsq) {
       this.count = count;
       this.sum = sum;
       this.sumsq = sumsq;
@@ -111,7 +133,7 @@ public class Variance {
     }
 
     @Override
-    public void mergeAccumulator(VarianceAccumulator<N> accumulator) {
+    public void mergeAccumulator(MomentAccumulator<N> accumulator) {
       count += accumulator.count;
       sum += accumulator.sum;
       sumsq += accumulator.sumsq;
@@ -123,7 +145,11 @@ public class Variance {
         return Double.NaN;
       }
       double mean = sum / count;
-      return (sumsq / count) - mean * mean;
+      if (type == MomentType.MEAN) {
+        return mean;
+      } else {
+        return (sumsq / count) - mean * mean;
+      }
     }
 
     @Override
@@ -133,10 +159,10 @@ public class Variance {
 
     @Override
     public boolean equals(Object other) {
-      if (!(other instanceof VarianceAccumulator)) {
+      if (!(other instanceof MomentAccumulator)) {
         return false;
       }
-      VarianceAccumulator<?> otherAccum = (VarianceAccumulator<?>) other;
+      MomentAccumulator<?> otherAccum = (MomentAccumulator<?>) other;
       return (
         (count == otherAccum.count) &&
         this.doubleEquals(sum, otherAccum.sum, EPSILON) &&
@@ -161,15 +187,15 @@ public class Variance {
    * can understand.
    * @param <N> Number
    */
-  static class VarianceCoder<N extends Number>
-    extends AtomicCoder<VarianceAccumulator<N>> {
+  static class MomentCoder<N extends Number>
+    extends AtomicCoder<MomentAccumulator<N>> {
 
     private static final long serialVersionUID = -3413678295720268029L;
     private static final Coder<Long> LONG_CODER = BigEndianLongCoder.of();
     private static final Coder<Double> DOUBLE_CODER = DoubleCoder.of();
 
     @Override
-    public void encode(VarianceAccumulator<N> value, OutputStream outStream)
+    public void encode(MomentAccumulator<N> value, OutputStream outStream)
       throws CoderException, IOException {
       LONG_CODER.encode(value.count, outStream);
       DOUBLE_CODER.encode(value.sum, outStream);
@@ -177,9 +203,9 @@ public class Variance {
     }
 
     @Override
-    public VarianceAccumulator<N> decode(InputStream inStream)
+    public MomentAccumulator<N> decode(InputStream inStream)
       throws CoderException, IOException {
-      return new VarianceAccumulator<>(
+      return new MomentAccumulator<>(
         LONG_CODER.decode(inStream),
         DOUBLE_CODER.decode(inStream),
         DOUBLE_CODER.decode(inStream)
