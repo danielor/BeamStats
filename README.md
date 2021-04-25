@@ -11,4 +11,6 @@ import com.danielor.beamstats.Moment
 PCollection<Double> input = buildInput();
 PCollection<Double> mean = input.apply(Moment.globally(Moment.MomentType.MEAN));
 PCollection<Double> variance = input.apply(Moment.globally(Moment.MomentType.VARIANCE));
+PCollection<Double> skew = input.apply(Moment.globally(Moment.MomentType.SKEW));
+PCollection<Double> kurtosis = input.apply(Moment.globally(Moment.MomentType.KURTOSIS));
 ```
