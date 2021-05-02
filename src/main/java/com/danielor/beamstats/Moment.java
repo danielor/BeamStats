@@ -188,7 +188,6 @@ public class Moment {
       M2 = cM2;
       M3 = cM3;
       M4 = cM4;
-      System.out.println(this.toString());
     }
 
     @Override
@@ -196,7 +195,6 @@ public class Moment {
       if (count == 0) {
         return Double.NaN;
       }
-      System.out.println(this.toString());
       if (type == MomentType.MEAN) {
         return M1;
       } else if (type == MomentType.VARIANCE) {
